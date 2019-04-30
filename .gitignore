@@ -1,0 +1,14 @@
+.*
+*.a
+*.bak
+*.log
+*.o
+*.orig
+*.s
+*.so
+*.tmp
+*~
+/bin
+/build
+/host*
+*.core
