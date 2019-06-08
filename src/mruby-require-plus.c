@@ -1,3 +1,53 @@
+#include <mruby.h>
+#include <mruby/dump.h>
+#include <mruby/irep.h>
+#include <mruby/value.h>
+#include <stdint.h>
+#include <string.h>
+
+#define E_LOAD_ERROR mrb_exc_get(mrb, "LoadError")
+
+static uint32_t
+loadu32be(const void *ptr)
+{
+  const uint8_t *p = (const uint8_t *)ptr;
+  return ((uint32_t)p[0] << 24) |
+         ((uint32_t)p[1] << 16) |
+         ((uint32_t)p[2] <<  8) |
+         ((uint32_t)p[3] <<  0);
+}
+
+static const uint8_t *
+check_mruby_binary(mrb_state *mrb, const void *buf, size_t size, mrb_value name)
+{
+  const struct rite_binary_header *bin = (const struct rite_binary_header *)buf;
+  if (size < sizeof(struct rite_binary_header) ||
+      size < loadu32be(bin->binary_size)) {
+    mrb_raisef(mrb, E_LOAD_ERROR,
+               "wrong binary size - %S",
+               name);
+  }
+
+  if (memcmp(bin->binary_version, RITE_BINARY_FORMAT_VER, sizeof(bin->binary_version)) != 0) {
+    mrb_raisef(mrb, E_LOAD_ERROR,
+               "wrong binary version - %S (expected \"%S\", but given \"%S\")",
+               name,
+               mrb_str_new_lit(mrb, RITE_BINARY_FORMAT_VER),
+               mrb_str_new(mrb, (const char *)bin->binary_version, sizeof(bin->binary_version)));
+  }
+
+  return (const uint8_t *)buf;
+}
+
+#if MRUBY_RELEASE_NO < 20002 && !defined(mrb_true_p)
+static mrb_irep *
+mrb_read_irep_buf(mrb_state *mrb, const void *buf, size_t bufsize, mrb_value name)
+{
+  check_mruby_binary(mrb, buf, bufsize, name);
+  return mrb_read_irep(mrb, (const uint8_t *)buf);
+}
+#endif
+
 #include "internals.h"
 #include <mruby/compile.h>
 #include <stdlib.h>
@@ -25,8 +75,6 @@
 # define PATH_SPLITTER ':'
 #endif
 
-#define E_LOAD_ERROR mrb_exc_get(mrb, "LoadError")
-
 //#define DEBUG_FORCE_WITH_WINDOWS_CODE
 #define MATERIALIZE_COMPONENTNAME
 #include "componentname.c"
@@ -45,16 +93,6 @@
 #if defined(__FreeBSD__) && !defined(HAVE_FDLOPEN) && !defined(WITHOUT_FDLOPEN)
 # define HAVE_FDLOPEN 1
 #endif
-
-static uint32_t
-loadu32be(const void *ptr)
-{
-  const uint8_t *p = (const uint8_t *)ptr;
-  return ((uint32_t)p[0] << 24) |
-         ((uint32_t)p[1] << 16) |
-         ((uint32_t)p[2] <<  8) |
-         ((uint32_t)p[3] <<  0);
-}
 
 static void make_funcname(MRB, VALUE str, const char name[]);
 
@@ -345,28 +383,6 @@ compile_from_rb(MRB, VALUE self)
   return Qnil;
 }
 
-static const uint8_t *
-check_mruby_binary(MRB, const void *buf, size_t size, VALUE name)
-{
-  const struct rite_binary_header *bin = (const struct rite_binary_header *)buf;
-  if (size < sizeof(struct rite_binary_header) ||
-      size < loadu32be(bin->binary_size)) {
-    mrb_raisef(mrb, E_LOAD_ERROR,
-               "wrong binary size - %S",
-               name);
-  }
-
-  if (memcmp(bin->binary_version, RITE_BINARY_FORMAT_VER, sizeof(bin->binary_version)) != 0) {
-    mrb_raisef(mrb, E_LOAD_ERROR,
-               "wrong binary version - %S (expected \"%S\", but given \"%S\")",
-               name,
-               mrb_str_new_lit(mrb, RITE_BINARY_FORMAT_VER),
-               mrb_str_new(mrb, (const char *)bin->binary_version, sizeof(bin->binary_version)));
-  }
-
-  return (const uint8_t *)buf;
-}
-
 static mrb_value
 load_from_mrb(MRB, VALUE self)
 {
@@ -375,11 +391,14 @@ load_from_mrb(MRB, VALUE self)
   const uint8_t *bin;
   mrb_int binsize;
   mrb_get_args(mrb, "oSzs", &vfs, &name, &signature, &bin, &binsize);
-  check_mruby_binary(mrb, bin, binsize, name);
 
   int ai = mrb_gc_arena_save(mrb);
   mrb_value mob = mrbx_mob_create(mrb);
-  mrb_irep *irep = mrb_read_irep(mrb, bin);
+  mrb_irep *irep = mrb_read_irep_buf(mrb, bin, binsize, name);
+  if (irep == NULL) {
+    check_mruby_binary(mrb, bin, binsize, name);
+    mrb_raisef(mrb, E_LOAD_ERROR, "load error - %S", name);
+  }
   mrbx_mob_push(mrb, mob, irep, (mrbx_mob_free_f *)mrb_irep_decref);
   struct RProc *proc = mrb_proc_new(mrb, irep);
   mrbx_mob_pop(mrb, mob, irep);
