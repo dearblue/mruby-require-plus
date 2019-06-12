@@ -4,6 +4,7 @@
 #include <mruby/value.h>
 #include <stdint.h>
 #include <string.h>
+#include <mruby-aux/compat/mruby.h> /* for mrb_exc_get() */
 
 #define E_LOAD_ERROR mrb_exc_get(mrb, "LoadError")
 
