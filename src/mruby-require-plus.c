@@ -42,7 +42,7 @@ check_mruby_binary(mrb_state *mrb, const void *buf, size_t size, mrb_value name)
 
 #if MRUBY_RELEASE_NO < 20002 && !defined(mrb_true_p)
 static mrb_irep *
-mrb_read_irep_buf(mrb_state *mrb, const void *buf, size_t bufsize, mrb_value name)
+mrb_read_irep_buf(mrb_state *mrb, const void *buf, size_t bufsize)
 {
   return mrb_read_irep(mrb, (const uint8_t *)buf);
 }
@@ -395,7 +395,7 @@ load_from_mrb(MRB, VALUE self)
   int ai = mrb_gc_arena_save(mrb);
   mrb_value mob = mrbx_mob_create(mrb);
   check_mruby_binary(mrb, bin, binsize, name);
-  mrb_irep *irep = mrb_read_irep_buf(mrb, bin, binsize, name);
+  mrb_irep *irep = mrb_read_irep_buf(mrb, bin, binsize);
   if (irep == NULL) {
     mrb_raisef(mrb, E_LOAD_ERROR, "load error - %S", name);
   }
