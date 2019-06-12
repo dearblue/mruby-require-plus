@@ -21,10 +21,4 @@ mrb_to_str(mrb_state *mrb, mrb_value obj)
 }
 #endif
 
-#include <mruby.h>
-
-#if MRUBY_RELEASE_NO < 20001
-MRB_API void mrb_notimplement(mrb_state *mrb);
-#endif
-
 #endif /* MRUBY_REQUIRE_PLUS_COMPAT_H */
