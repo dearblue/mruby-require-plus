@@ -60,6 +60,7 @@ mrb_read_irep_buf(mrb_state *mrb, const void *buf, size_t bufsize)
 #include <mruby-aux/mobptr.h>
 #include <mruby/dump.h>
 #include <mruby/proc.h>
+#include <mruby-aux/component-name.h>
 
 #define LOG0() do { fprintf(stderr, "%s:%d:%s.\n", __FILE__, __LINE__, __func__); } while (0)
 #define LOGS(MESG) do { fprintf(stderr, "%s:%d:%s: %s\n", __FILE__, __LINE__, __func__, MESG); } while (0)
@@ -74,10 +75,6 @@ mrb_read_irep_buf(mrb_state *mrb, const void *buf, size_t bufsize)
 #else
 # define PATH_SPLITTER ':'
 #endif
-
-//#define DEBUG_FORCE_WITH_WINDOWS_CODE
-#define MATERIALIZE_COMPONENTNAME
-#include "componentname.c"
 
 #define MATERIALIZE_WHATMYNAME
 #include "whatmyname.c"
@@ -99,7 +96,7 @@ static void make_funcname(MRB, VALUE str, const char name[]);
 static void
 aux_str_add_pathsep(MRB, VALUE str)
 {
-  if (needpathsep(RSTRING_PTR(str), RSTRING_LEN(str))) {
+  if (mrbx_need_pathsep_p(RSTRING_PTR(str), RSTRING_LEN(str))) {
     mrb_str_cat_cstr(mrb, str, "/");
   }
 }
@@ -107,7 +104,7 @@ aux_str_add_pathsep(MRB, VALUE str)
 static void
 aux_add_pathsep(char *str, size_t len)
 {
-  if (needpathsep(str, len)) {
+  if (mrbx_need_pathsep_p(str, len)) {
     str[len + 0] = '/';
     str[len + 1] = '\0';
   }
@@ -535,13 +532,12 @@ load_shared_object(MRB, VALUE self)
   if (handle == NULL) { goto raise_exc; }
 
   {
-    const char *rootterm, *dirterm, *basename, *extname, *nameterm;
-    splitpath(RSTRING_PTR(name), RSTRING_LEN(name), &rootterm, &dirterm, &basename, &extname, &nameterm);
+    mrbx_component_name cn = mrbx_split_path(RSTRING_PTR(name), RSTRING_LEN(name));
     VALUE base;
-    if (nameterm - extname == 3 && memcmp(extname, ".so", 3) == 0) {
-      base = mrb_str_new(mrb, basename, extname - basename);
+    if (cn.nameterm - cn.extname == 3 && memcmp(cn.extname, ".so", 3) == 0) {
+      base = mrb_str_new(mrb, cn.basename, cn.extname - cn.basename);
     } else {
-      base = mrb_str_new(mrb, basename, nameterm - basename);
+      base = mrb_str_new(mrb, cn.basename, cn.nameterm - cn.basename);
     }
     VALUE funcname = mrb_str_new(mrb, NULL, 0);
     mruby_require_plus_init_f *init = (mruby_require_plus_init_f *)dlfunc(handle, make_initname(mrb, funcname, RSTRING_PTR(base)));
@@ -610,9 +606,9 @@ joinpath(MRB, VALUE str, mrb_int argc, const VALUE argv[], bool *istermsep)
 
         if (mrb_nil_p(str)) {
           str = mrb_str_new(mrb, s, slen);
-          *istermsep = !needpathsep(s, slen);
+          *istermsep = !mrbx_need_pathsep_p(s, slen);
         } else if (slen > 0) {
-          if (!(!!*istermsep ^ !!ispathsep(s[0]))) {
+          if (!(!!*istermsep ^ !!mrbx_pathsep_p(s[0]))) {
             /* 末尾が "/" で終わっておりかつ追加しようとしている文字列が "/" で始まる場合、
              * あるいは連結する時に "/" を必要とする場合は処理する */
             if (*istermsep) {
@@ -624,7 +620,7 @@ joinpath(MRB, VALUE str, mrb_int argc, const VALUE argv[], bool *istermsep)
           }
 
           if (slen > 0) {
-            *istermsep = ispathsep(s[slen - 1]);
+            *istermsep = mrbx_pathsep_p(s[slen - 1]);
             mrb_str_cat(mrb, str, s, slen);
           }
         }
@@ -763,13 +759,12 @@ ext_dirname(MRB, VALUE self)
   mrb_get_args(mrb, "S", &arg0);
   const char *path = RSTRING_PTR(arg0);
   size_t len = RSTRING_LEN(arg0);
-  const char *rootterm, *dirterm, *basename, *extname, *nameterm;
-  splitpath(path, len, &rootterm, &dirterm, &basename, &extname, &nameterm);
+  mrbx_component_name cn = mrbx_split_path(path, len);
 
-  if (dirterm == path) {
+  if (cn.dirterm == path) {
     return mrb_str_new_lit(mrb, ".");
   } else {
-    return mrb_str_new(mrb, path, dirterm - path);
+    return mrb_str_new(mrb, path, cn.dirterm - path);
   }
 }
 
@@ -780,19 +775,18 @@ ext_basename(MRB, VALUE self)
   mrb_get_args(mrb, "S|S", &arg0, &arg1);
   const char *path = RSTRING_PTR(arg0);
   size_t len = RSTRING_LEN(arg0);
-  const char *rootterm, *dirterm, *basename, *extname, *nameterm;
-  splitpath(path, len, &rootterm, &dirterm, &basename, &extname, &nameterm);
+  mrbx_component_name cn = mrbx_split_path(path, len);
 
-  if (nameterm == path) {
+  if (cn.nameterm == path) {
     return mrb_str_new_lit(mrb, ".");
   } else if (!mrb_nil_p(arg1)) {
     if (strcmp(".*", RSTRING_PTR(arg1)) == 0 ||
-        strncmp(extname, RSTRING_PTR(arg1), nameterm - extname) == 0) {
-      return mrb_str_new(mrb, basename, extname - basename);
+        strncmp(cn.extname, RSTRING_PTR(arg1), cn.nameterm - cn.extname) == 0) {
+      return mrb_str_new(mrb, cn.basename, cn.extname - cn.basename);
     }
   }
 
-  return mrb_str_new(mrb, basename, nameterm - basename);
+  return mrb_str_new(mrb, cn.basename, cn.nameterm - cn.basename);
 }
 
 static VALUE
@@ -802,29 +796,27 @@ ext_extname(MRB, VALUE self)
   mrb_get_args(mrb, "S", &arg0);
   const char *path = RSTRING_PTR(arg0);
   size_t len = RSTRING_LEN(arg0);
-  const char *rootterm, *dirterm, *basename, *extname, *nameterm;
-  splitpath(path, len, &rootterm, &dirterm, &basename, &extname, &nameterm);
+  mrbx_component_name cn = mrbx_split_path(path, len);
 
-  if (extname == nameterm) {
+  if (cn.extname == cn.nameterm) {
     return Qnil;
   } else {
-    return mrb_str_new(mrb, extname, nameterm - extname);
+    return mrb_str_new(mrb, cn.extname, cn.nameterm - cn.extname);
   }
 }
 
 static VALUE
 ext_split_path(MRB, VALUE self)
 {
-  const char *rootterm, *dirterm, *basename, *extname, *nameterm;
   mrb_check_type(mrb, self, MRB_TT_STRING);
   size_t pathlen = mrb_str_strlen(mrb, RSTRING(self));
   const char *path = RSTRING_PTR(self);
-  splitpath(path, pathlen, &rootterm, &dirterm, &basename, &extname, &nameterm);
+  mrbx_component_name cn = mrbx_split_path(path, pathlen);
 
-  return MRBX_TUPLE(mrb_str_new(mrb, path, rootterm - path),
-                    mrb_str_new(mrb, path, dirterm - path),
-                    mrb_str_new(mrb, basename, nameterm - basename),
-                    mrb_str_new(mrb, extname, nameterm - extname));
+  return MRBX_TUPLE(mrb_str_new(mrb, path, cn.rootterm - path),
+                    mrb_str_new(mrb, path, cn.dirterm - path),
+                    mrb_str_new(mrb, cn.basename, cn.nameterm - cn.basename),
+                    mrb_str_new(mrb, cn.extname, cn.nameterm - cn.extname));
 }
 
 static VALUE
@@ -940,16 +932,16 @@ init_loadpath(MRB)
   char myname[PATH_MAX + 1];
   int namelen = whatmyname(myname, sizeof(myname));
   if (namelen > 0) {
-    const char *rootterm, *dirterm, *basename, *extname, *nameterm;
+    mrbx_component_name cn;
     /* dirname(myname) */
-    splitpath(myname, namelen, &rootterm, &dirterm, &basename, &extname, &nameterm);
-    if (dirterm > myname) {
+    cn = mrbx_split_path(myname, namelen);
+    if (cn.dirterm > myname) {
       VALUE tmp;
-      VALUE objdir1 = mrb_str_new(mrb, myname, dirterm - myname);
+      VALUE objdir1 = mrb_str_new(mrb, myname, cn.dirterm - myname);
       /* dirname(dirname(myname)) */
-      splitpath(myname, dirterm - myname, &rootterm, &dirterm, &basename, &extname, &nameterm);
-      if (dirterm > myname) {
-        VALUE objdir2 = mrb_str_new(mrb, myname, dirterm - myname);
+      cn = mrbx_split_path(myname, cn.dirterm - myname);
+      if (cn.dirterm > myname) {
+        VALUE objdir2 = mrb_str_new(mrb, myname, cn.dirterm - myname);
         mrb_str_cat_cstr(mrb, objdir2, "/lib");
         tmp = mrb_str_dup(mrb, objdir2);
         mrb_str_cat_cstr(mrb, tmp, "/mruby");
